@@ -1,0 +1,2 @@
+primp==2.0.1
+selectolax==1.0.2

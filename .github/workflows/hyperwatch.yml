@@ -1,0 +1,110 @@
+name: Hyper Watch
+
+on:
+  schedule:
+    # Times are UTC. Every 5 minutes, the fastest GitHub allows. GitHub often starts
+    # scheduled runs late or skips some when it's busy, so real gaps can be longer.
+    # This repo is public, so these runs don't use the account's free Actions minutes.
+    # The watch switches its own schedule off once every travel day has passed.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      summary_now:
+        description: "Also email where prices stand right now"
+        type: boolean
+        default: false
+      test_notification:
+        description: "Only send a test message (checks that alerts can reach you)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Test only: search and print, but send no email and save nothing"
+        type: boolean
+        default: false
+      chain:
+        description: "Leave on 'off' here. The 5-minute schedule does the checking."
+        type: choice
+        options: ["off", "once"]
+        default: "off"
+
+permissions:
+  contents: write # saves its memory to the hyperwatch-data branch
+  issues: write   # backup way to reach you if email is down
+  actions: write  # lets it switch its own schedule off when the trip dates have passed
+
+concurrency:
+  group: hyperwatch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      GITHUB_TOKEN: ${{ github.token }}
+      DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+      EXTRA: ${{ inputs.test_notification && '--test-notification' || (inputs.summary_now && '--summary-now' || '') }}
+      HYPERWATCH_CHAIN: ${{ inputs.chain || 'off' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: hyperwatch-requirements.txt
+
+      - name: Install
+        run: pip install -q -r hyperwatch-requirements.txt
+
+      - name: Load memory
+        id: memory
+        run: |
+          mkdir -p hyperwatch_data
+          code=0
+          git ls-remote --exit-code --heads origin hyperwatch-data > /dev/null || code=$?
+          if [ "$code" = "0" ]; then
+            git fetch --quiet --depth=1 origin hyperwatch-data
+            if git show FETCH_HEAD:state.json > hyperwatch_data/state.json 2> /dev/null; then
+              echo "Loaded memory ($(wc -c < hyperwatch_data/state.json) bytes)."
+            else
+              rm -f hyperwatch_data/state.json
+              echo "The memory branch has no state.json yet."
+            fi
+            git show FETCH_HEAD:latest.md > hyperwatch_data/latest.md 2> /dev/null || rm -f hyperwatch_data/latest.md
+          elif [ "$code" = "2" ]; then
+            echo "No saved memory yet: this is the first run."
+          else
+            echo "Couldn't reach GitHub to load memory (git exit $code). Stopping so nothing is lost."
+            exit 1
+          fi
+
+      - name: Check fares
+        run: python hyperwatch.py $DRY_RUN $EXTRA
+
+      - name: Save memory
+        if: always() && steps.memory.outcome == 'success' && env.DRY_RUN == ''
+        run: |
+          cd hyperwatch_data
+          if [ ! -s state.json ]; then
+            echo "Nothing to save."
+            exit 0
+          fi
+          rm -rf .git
+          git init --quiet --initial-branch=hyperwatch-data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          if [ -f latest.md ]; then git add latest.md; fi
+          git commit --quiet -m "Hyper Watch prices $(date -u +'%Y-%m-%d %H:%M') UTC"
+          git push --quiet --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" hyperwatch-data
+          echo "Saved."
+
+      - name: Line up the next check
+        if: always() && env.HYPERWATCH_CHAIN != 'off'
+        run: python hyperwatch.py --next

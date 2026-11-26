@@ -1,0 +1,69 @@
+# ================================================================
+#  HYPER WATCH: prices every day in a travel window, every run,
+#  and emails you when a fare is exceptionally cheap.
+#  Edit this right on GitHub: open the file, click the pencil,
+#  change things, then "Commit changes". The next run uses it.
+# ================================================================
+
+[settings]
+timezone = "America/New_York"
+
+# This repo is public, so runs don't use your free GitHub minutes. 0 = no monthly limit.
+monthly_run_cap = 0
+
+
+# ================================================================
+#  One [[watch]] block per trip. Prices are one way, for one adult.
+#
+#  steal_one_way             alert when a one-way OUT is this price or less
+#  steal_round_trip          alert when out + back (two one-ways) is this or less
+#  under_60_day_low_percent  also alert when a day is this % under the lowest
+#                            price Google recorded for that day in the past 60 days
+#  sudden_drop_percent       also alert when a day suddenly drops this % to an
+#                            unusually low price
+#  nights                    trip lengths used for the round-trip total
+#  depart_days / return_days only these weekdays, e.g. ["Thu", "Fri", "Sat"]
+#  active_from / active_until  this watch only runs between these dates
+#  summary_at                send a "where prices stand" email at these times
+#  note                      a line of your own at the top of that email
+#  max_stops                 0 = nonstop only, 1, or 2
+#  max_hours                 skip trips longer than this door to door
+#  origins / destinations    up to 7 airports each; all are searched at once
+# ================================================================
+
+# Ended Nov 17 (switched to weekend trips early): any December trip of 3 to 10 nights.
+[[watch]]
+name = "NYC → Puerto Rico, December"
+origins = ["EWR", "JFK", "LGA"]
+destinations = ["SJU", "BQN", "PSE"]   # San Juan, Aguadilla, Ponce
+depart_between = ["2026-12-01", "2026-12-31"]
+return_between = ["2026-12-04", "2027-01-10"]
+nights = [3, 10]
+active_until = "2026-11-17"
+summary_at = ["2026-11-19 18:00"]
+note = "You need to decide on a longer trip by Nov 20. From Nov 21 this watch switches to weekend trips only."
+max_stops = 1
+max_hours = 12
+steal_one_way = 79
+steal_round_trip = 135
+under_60_day_low_percent = 10
+sudden_drop_percent = 35
+
+# From Nov 18: weekend trips only. Out Thu/Fri/Sat, home Sun/Mon/Tue, 2 to 4 nights.
+[[watch]]
+name = "NYC → Puerto Rico, December weekends"
+origins = ["EWR", "JFK", "LGA"]
+destinations = ["SJU", "BQN", "PSE"]
+depart_between = ["2026-12-01", "2026-12-31"]
+return_between = ["2026-12-05", "2027-01-05"]
+depart_days = ["Thu", "Fri", "Sat"]
+return_days = ["Sun", "Mon", "Tue"]
+nights = [2, 4]
+active_from = "2026-11-18"
+note = "Weekend trips only (out Thu/Fri/Sat, home Sun/Mon/Tue). Switched on Nov 18, in place of the longer-trip watch."
+max_stops = 1
+max_hours = 12
+steal_one_way = 79
+steal_round_trip = 160
+under_60_day_low_percent = 10
+sudden_drop_percent = 35
