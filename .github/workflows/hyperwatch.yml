@@ -22,9 +22,9 @@ on:
         type: boolean
         default: false
       chain:
-        description: "Leave on 'off' here. The 5-minute schedule does the checking."
+        description: "'loop' keeps checking every 5 minutes on its own. Leave on 'off' for a one-off check."
         type: choice
-        options: ["off", "once"]
+        options: ["off", "once", "loop"]
         default: "off"
 
 permissions:
@@ -39,7 +39,8 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    # A looping run does up to 11 checks, 5 minutes apart, then hands over to a fresh run.
+    timeout-minutes: 70
     env:
       EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
       EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
@@ -50,6 +51,10 @@ jobs:
       DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
       EXTRA: ${{ inputs.test_notification && '--test-notification' || (inputs.summary_now && '--summary-now' || '') }}
       HYPERWATCH_CHAIN: ${{ inputs.chain || 'off' }}
+      # GitHub skips most */5 scheduled runs, so scheduled runs and 'loop' runs keep checking
+      # every 5 minutes themselves and line up the next run when they finish.
+      LOOP: ${{ (github.event_name == 'schedule' || inputs.chain == 'loop') && !inputs.dry_run && !inputs.test_notification && !inputs.summary_now }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v6
 
@@ -85,26 +90,60 @@ jobs:
           fi
 
       - name: Check fares
-        run: python hyperwatch.py $DRY_RUN $EXTRA
-
-      - name: Save memory
-        if: always() && steps.memory.outcome == 'success' && env.DRY_RUN == ''
+        id: check
         run: |
-          cd hyperwatch_data
-          if [ ! -s state.json ]; then
-            echo "Nothing to save."
-            exit 0
-          fi
-          rm -rf .git
-          git init --quiet --initial-branch=hyperwatch-data
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json
-          if [ -f latest.md ]; then git add latest.md; fi
-          git commit --quiet -m "Hyper Watch prices $(date -u +'%Y-%m-%d %H:%M') UTC"
-          git push --quiet --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" hyperwatch-data
-          echo "Saved."
+          save_memory() {
+            if [ -n "$DRY_RUN" ] || [ ! -s hyperwatch_data/state.json ]; then return 0; fi
+            (
+              cd hyperwatch_data
+              rm -rf .git
+              git init --quiet --initial-branch=hyperwatch-data
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add state.json
+              if [ -f latest.md ]; then git add latest.md; fi
+              git commit --quiet -m "Hyper Watch prices $(date -u +'%Y-%m-%d %H:%M') UTC"
+              git push --quiet --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" hyperwatch-data
+            ) && echo "Saved." || echo "! Couldn't save memory this time."
+          }
+          state_says() {
+            python3 -c "import json,sys; s=json.load(open('hyperwatch_data/state.json')); print($1)" 2>/dev/null || echo unknown
+          }
+          checks=1
+          if [ "$LOOP" = "true" ]; then checks=11; fi
+          status=0
+          for i in $(seq 1 "$checks"); do
+            started=$(date +%s)
+            [ "$checks" -gt 1 ] && echo "::group::Check $i of $checks ($(date -u +'%H:%M') UTC)"
+            python hyperwatch.py $DRY_RUN $EXTRA || status=$?
+            save_memory
+            [ "$checks" -gt 1 ] && echo "::endgroup::"
+            if [ "$status" != "0" ]; then echo "The check failed, so this run stops here."; break; fi
+            if [ "$(state_says "bool(s.get('finished'))")" = "True" ]; then
+              echo "The watch is over, so no more checks."; echo "finished=true" >> "$GITHUB_OUTPUT"; break
+            fi
+            [ "$i" = "$checks" ] && break
+            # Wait out the rest of the 5 minutes, even after a bad check, so the pace never speeds up.
+            wait=$(( 300 - ($(date +%s) - started) ))
+            [ "$wait" -gt 0 ] && sleep "$wait"
+            if [ "$(state_says "s.get('health',{}).get('bad_runs',0)")" != "0" ]; then
+              echo "Google withheld most results, so handing over to a fresh run (new server)."; break
+            fi
+          done
+          exit "$status"
+
+      - name: Line up the next looping run
+        if: always() && env.LOOP == 'true' && steps.check.outputs.finished != 'true' && steps.memory.outcome == 'success'
+        run: |
+          for try in 1 2 3; do
+            if gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/workflows/hyperwatch.yml/dispatches" \
+                 -f ref="${GITHUB_REF_NAME:-main}" -f 'inputs[chain]=loop' > /dev/null; then
+              echo "Next run lined up. It starts as soon as this one ends."; exit 0
+            fi
+            sleep $((5 * try))
+          done
+          echo "Couldn't line up the next run. The 5-minute schedule will restart the loop."
 
       - name: Line up the next check
-        if: always() && env.HYPERWATCH_CHAIN != 'off'
+        if: always() && env.HYPERWATCH_CHAIN == 'once'
         run: python hyperwatch.py --next

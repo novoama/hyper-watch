@@ -8,8 +8,11 @@ day is exceptionally cheap.
   the pencil, change a number, then **Commit changes**.
 - **Every day's current price:** the `latest.md` file on the `hyperwatch-data`
   branch. The watch keeps its memory on that branch too.
-- **Schedule:** every 5 minutes (`.github/workflows/hyperwatch.yml`). GitHub often
-  starts scheduled runs late or skips some. This repo is public, so runs are free.
+- **Schedule:** every 5 minutes (`.github/workflows/hyperwatch.yml`). GitHub skips most
+  5-minute scheduled runs, so each run keeps checking every 5 minutes by itself for about
+  an hour, then starts a fresh run (a new server, which also helps when Google turns one
+  away). The 5-minute schedule only restarts the loop if it ever stops. This repo is
+  public, so runs are free.
 - **Email:** add the repo secrets `EMAIL_FROM`, `EMAIL_APP_PASSWORD` and `EMAIL_TO`
   (Settings, Secrets and variables, Actions). Without them, alerts arrive as GitHub
   issues on this repo instead.
